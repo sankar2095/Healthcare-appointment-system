@@ -1,0 +1,305 @@
+<!--
+Healthcare Appointment Booking System
+Single-file HTML (index.html) - ready to host on GitHub Pages
+
+How to use:
+1. Save this file as `index.html`.
+2. Create a new GitHub repo and upload index.html (or push it) to the repo's main branch.
+3. Enable GitHub Pages in repo settings (use main branch / root). The site will be available as https://<username>.github.io/<repo>/
+
+Features:
+- Create, view, edit, cancel appointments
+- Small client-side 'Admin' view protected by a password (default: admin123)
+- Search, filter by date, sort
+- Data stored in localStorage (persists across visits)
+- Export appointments as CSV
+- Responsive layout
+
+This file uses React + ReactDOM from CDN and Babel to compile JSX in-browser (for easy hosting without build tools).
+-->
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Healthcare Appointment Booking System</title>
+  <link rel="icon" href="data:,"><style>
+  :root{--bg:#f6f8fa;--card:#ffffff;--muted:#6b7280;--accent:#0ea5a8;--danger:#ef4444}
+  *{box-sizing:border-box}
+  body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial; margin:0; background:var(--bg); color:#0f172a}
+  .container{max-width:980px;margin:28px auto;padding:20px}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
+  h1{font-size:20px;margin:0}
+  .card{background:var(--card);border-radius:12px;padding:16px;box-shadow:0 6px 18px rgba(2,6,23,0.06)}
+  .grid{display:grid;grid-template-columns:1fr 360px;gap:16px}
+  @media(max-width:880px){.grid{grid-template-columns:1fr} .sidebar{order:2}}
+  label{display:block;font-size:13px;margin-bottom:6px;color:var(--muted)}
+  input,select,textarea{width:100%;padding:10px;border-radius:8px;border:1px solid #e6e9ee;font-size:14px}
+  button{cursor:pointer;border:0;padding:10px 12px;border-radius:8px;background:var(--accent);color:#fff;font-weight:600}
+  .muted{color:var(--muted);font-size:13px}
+  .small{font-size:13px}
+  .list{margin-top:12px}
+  .item{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:10px;border:1px solid #eef2f6;margin-bottom:8px}
+  .meta{font-size:13px;color:var(--muted)}
+  .controls{display:flex;gap:8px}
+  .btn-ghost{background:transparent;color:var(--accent);border:1px solid rgba(14,165,168,0.12)}
+  .btn-danger{background:var(--danger)}
+  .pill{background:#eef6f6;padding:6px 10px;border-radius:999px;font-weight:600}
+  .searchbar{display:flex;gap:8px}
+  .footer{margin-top:14px;text-align:center;color:var(--muted);font-size:13px}
+  .empty{padding:24px;text-align:center;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React + Babel (development) -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/dayjs@1/dayjs.min.js"></script>
+  <script src="https://unpkg.com/babel-standalone@6.26.0/babel.min.js"></script>
+
+  <script type="text/babel">
+  const {useState,useEffect,useMemo} = React;
+
+  // Utils
+  const uid = () => 'a'+Math.random().toString(36).slice(2,9);
+  const STORAGE_KEY = 'hc_appointments_v1';
+  const ADMIN_PASSWORD = 'admin123'; // change in file before production
+
+  function loadAppointments(){
+    try{const s=localStorage.getItem(STORAGE_KEY); return s?JSON.parse(s):[];}catch(e){return []}
+  }
+  function saveAppointments(list){localStorage.setItem(STORAGE_KEY,JSON.stringify(list));}
+  function exportCSV(items){
+    const header=['id','name','email','phone','doctor','department','date','time','notes','status'];
+    const rows=items.map(it=>[it.id,it.name,it.email,it.phone,it.doctor,it.department,it.date,it.time,`"${(it.notes||'').replace(/\"/g,'"') }"`,it.status]);
+    const csv=[header.join(','),...rows.map(r=>r.join(','))].join('\n');
+    const blob=new Blob([csv],{type:'text/csv'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download='appointments.csv'; a.click(); URL.revokeObjectURL(url);
+  }
+
+  function Header({onExport,onClear,onAdminToggle,count}){
+    return (
+      <header>
+        <h1>Healthcare Appointment Booking System</h1>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <div className="muted small">{count} appointment(s)</div>
+          <button title="Export as CSV" onClick={onExport} className="btn-ghost">Export</button>
+          <button title="Clear all data" onClick={onClear} className="btn-ghost">Clear</button>
+          <button onClick={onAdminToggle} className="btn-ghost">Admin</button>
+        </div>
+      </header>
+    );
+  }
+
+  function BookingForm({onSubmit,editing,onCancel}){
+    const [name,setName]=useState(editing?.name||'');
+    const [email,setEmail]=useState(editing?.email||'');
+    const [phone,setPhone]=useState(editing?.phone||'');
+    const [doctor,setDoctor]=useState(editing?.doctor||'Dr. A');
+    const [department,setDepartment]=useState(editing?.department||'General');
+    const [date,setDate]=useState(editing?.date||'');
+    const [time,setTime]=useState(editing?.time||'09:00');
+    const [notes,setNotes]=useState(editing?.notes||'');
+
+    useEffect(()=>{
+      if(editing){setName(editing.name||'');setEmail(editing.email||'');setPhone(editing.phone||'');setDoctor(editing.doctor||'Dr. A');setDepartment(editing.department||'General');setDate(editing.date||'');setTime(editing.time||'09:00');setNotes(editing.notes||'');}
+    },[editing]);
+
+    function submit(e){
+      e.preventDefault();
+      if(!name.trim()||!email.trim()||!phone.trim()||!date) return alert('Please fill name, email, phone and date.');
+      const appt={
+        id: editing?.id||uid(), name: name.trim(), email: email.trim(), phone: phone.trim(), doctor, department, date, time, notes, status: editing?.status||'Scheduled', createdAt: editing?.createdAt||new Date().toISOString()
+      };
+      onSubmit(appt);
+      if(!editing){setName('');setEmail('');setPhone('');setDate('');setTime('09:00');setNotes('');}
+    }
+
+    return (
+      <div className="card">
+        <h3 style={{marginTop:0}}>{editing? 'Edit Appointment':'Book an Appointment'}</h3>
+        <form onSubmit={submit}>
+          <label>Name <input value={name} onChange={e=>setName(e.target.value)} /></label>
+          <label>Email <input type="email" value={email} onChange={e=>setEmail(e.target.value)} /></label>
+          <label>Phone <input value={phone} onChange={e=>setPhone(e.target.value)} /></label>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            <label>Department <select value={department} onChange={e=>setDepartment(e.target.value)}><option>General</option><option>Cardiology</option><option>Dermatology</option><option>Neurology</option></select></label>
+            <label>Doctor <select value={doctor} onChange={e=>setDoctor(e.target.value)}><option>Dr. A</option><option>Dr. B</option><option>Dr. C</option></select></label>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+            <label>Date <input type="date" value={date} onChange={e=>setDate(e.target.value)} /></label>
+            <label>Time <input type="time" value={time} onChange={e=>setTime(e.target.value)} /></label>
+          </div>
+          <label>Notes <textarea rows={3} value={notes} onChange={e=>setNotes(e.target.value)} /></label>
+          <div style={{display:'flex',gap:8,marginTop:10}}>
+            <button type="submit">{editing? 'Save Changes':'Book Appointment'}</button>
+            {editing && <button type="button" className="btn-ghost" onClick={onCancel}>Cancel</button>}
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  function AppointmentItem({appt,onEdit,onCancel,onToggle}){
+    return (
+      <div className="item">
+        <div>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <strong>{appt.name}</strong>
+            <div className="pill">{appt.department}</div>
+          </div>
+          <div className="meta">{appt.date} · {appt.time} · {appt.doctor}</div>
+          <div className="muted small">{appt.email} · {appt.phone}</div>
+        </div>
+        <div className="controls">
+          <button className="btn-ghost" onClick={()=>onEdit(appt)}>Edit</button>
+          <button className="btn-ghost" onClick={()=>onToggle(appt)}>{appt.status==='Cancelled'?'Restore':'Cancel'}</button>
+          <button className="btn-danger" onClick={()=>onCancel(appt)}>Delete</button>
+        </div>
+      </div>
+    );
+  }
+
+  function AppointmentList({items,onEdit,onCancel,onToggle,query,filterDate,sortBy}){
+    const filtered = items.filter(it=>{
+      if(query){const q=query.toLowerCase(); if(!(`${it.name} ${it.email} ${it.doctor} ${it.department}`.toLowerCase().includes(q))) return false}
+      if(filterDate && it.date!==filterDate) return false;
+      return true;
+    }).sort((a,b)=>{
+      if(sortBy==='date') return a.date.localeCompare(b.date) || a.time.localeCompare(b.time);
+      return new Date(b.createdAt)-new Date(a.createdAt);
+    });
+
+    if(filtered.length===0) return <div className="empty card">No appointments found.</div>;
+    return (
+      <div className="list">
+        {filtered.map(it=> <AppointmentItem key={it.id} appt={it} onEdit={onEdit} onCancel={onCancel} onToggle={onToggle} />)}
+      </div>
+    );
+  }
+
+  function AdminPanel({onBack,items,onExport,clearAll}){
+    const [password,setPassword]=useState('');
+    const [authed,setAuthed]=useState(false);
+    useEffect(()=>{setAuthed(false)},[]);
+    function tryLogin(e){e.preventDefault(); if(password===ADMIN_PASSWORD){setAuthed(true);}else alert('Wrong password')}
+
+    if(!authed) return (
+      <div className="card sidebar">
+        <h3>Admin Login</h3>
+        <form onSubmit={tryLogin}>
+          <label>Password <input type="password" value={password} onChange={e=>setPassword(e.target.value)} /></label>
+          <div style={{display:'flex',gap:8,marginTop:8}}>
+            <button type="submit">Login</button>
+            <button type="button" className="btn-ghost" onClick={onBack}>Back</button>
+          </div>
+        </form>
+        <div className="muted small" style={{marginTop:10}}>Default password in this demo is <code>admin123</code>. Change it before sharing.</div>
+      </div>
+    );
+
+    return (
+      <div className="card sidebar">
+        <h3>Admin Panel</h3>
+        <div className="muted small">Total: {items.length}</div>
+        <div style={{marginTop:12}}>
+          <button onClick={()=>onExport()}>Export CSV</button>
+          <button className="btn-ghost" onClick={clearAll}>Clear All</button>
+          <button className="btn-ghost" onClick={onBack}>Logout</button>
+        </div>
+        <div style={{marginTop:12}}>
+          <strong>Recent</strong>
+          <div style={{marginTop:8}}>
+            {items.slice(-5).reverse().map(it=> (
+              <div key={it.id} style={{padding:'6px 0',borderBottom:'1px solid #f2f4f7'}}>
+                <div style={{fontWeight:600}}>{it.name} <span className="muted small">{it.status}</span></div>
+                <div className="muted small">{it.date} · {it.time} · {it.doctor}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function App(){
+    const [items,setItems]=useState(loadAppointments());
+    const [editing,setEditing]=useState(null);
+    const [query,setQuery]=useState('');
+    const [filterDate,setFilterDate]=useState('');
+    const [sortBy,setSortBy]=useState('date');
+    const [showAdmin,setShowAdmin]=useState(false);
+
+    useEffect(()=>{saveAppointments(items)},[items]);
+
+    function handleSubmit(appt){
+      setItems(prev=>{
+        const exists = prev.find(p=>p.id===appt.id);
+        if(exists) return prev.map(p=>p.id===appt.id?{...appt}:p);
+        return [...prev, appt];
+      });
+      setEditing(null);
+      alert('Appointment saved');
+    }
+    function handleEdit(appt){ setEditing(appt); window.scrollTo({top:0,behavior:'smooth'}) }
+    function handleDelete(appt){ if(!confirm('Delete this appointment?')) return; setItems(prev=>prev.filter(p=>p.id!==appt.id)); }
+    function handleToggle(appt){ setItems(prev=>prev.map(p=>p.id===appt.id?{...p,status: p.status==='Cancelled'?'Scheduled':'Cancelled'}:p)); }
+    function handleExport(){ exportCSV(items); }
+    function handleClearAll(){ if(!confirm('Clear ALL appointments?')) return; setItems([]); }
+
+    const count = items.length;
+
+    return (
+      <div className="container">
+        <Header onExport={handleExport} onClear={handleClearAll} onAdminToggle={()=>setShowAdmin(true)} count={count} />
+        <div className="grid">
+          <div>
+            <BookingForm onSubmit={handleSubmit} editing={editing} onCancel={()=>setEditing(null)} />
+
+            <div style={{marginTop:14}} className="card">
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <div className="searchbar">
+                    <input placeholder="Search by name, email, doctor..." value={query} onChange={e=>setQuery(e.target.value)} />
+                    <select value={sortBy} onChange={e=>setSortBy(e.target.value)}>
+                      <option value="date">Sort by date</option>
+                      <option value="new">Newest first</option>
+                    </select>
+                  </div>
+                </div>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <label className="small">Filter date <input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} /></label>
+                </div>
+              </div>
+
+              <AppointmentList items={items} onEdit={handleEdit} onCancel={handleDelete} onToggle={handleToggle} query={query} filterDate={filterDate} sortBy={sortBy} />
+            </div>
+
+            <div className="footer">Made with ♥ — Save as <code>index.html</code> and host on GitHub Pages.</div>
+          </div>
+
+          <div className="sidebar">
+            {showAdmin ? <AdminPanel onBack={()=>setShowAdmin(false)} items={items} onExport={handleExport} clearAll={handleClearAll} /> :
+              <div className="card">
+                <h3>Quick Info</h3>
+                <div className="muted small">This demo stores data in your browser's localStorage. It is intended for demo and learning purposes only — no server or PHI protections included.</div>
+                <hr style={{margin:'12px 0'}} />
+                <div style={{display:'grid',gap:8}}>
+                  <div><strong>How to use</strong><div className="muted small">Fill the form and click "Book Appointment". Use Admin to export CSV.</div></div>
+                  <div><strong>Change password</strong><div className="muted small">Edit ADMIN_PASSWORD constant in the file to change the password.</div></div>
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
